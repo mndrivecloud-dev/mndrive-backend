@@ -7,17 +7,20 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Rota de teste inicial
+// Armazena temporariamente os clientes ativos por número de telefone
+const activeClients = {};
+
 app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Rota 1: Envia o código de login para o Telegram do usuário
+// Rota 1: Envia o código e guarda a sessão do cliente em memória
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
         
-        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
+        const stringSession = new StringSession("");
+        const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
             connectionRetries: 5,
         });
 
@@ -36,7 +39,8 @@ app.post('/api/auth/send-code', async (req, res) => {
             })
         );
 
-        await client.disconnect();
+        // Guarda o cliente ativo para ser reutilizado no sign-in
+        activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
 
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (error) {
@@ -45,19 +49,19 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código digitado usando a API de sign in do GramJS
+// Rota 2: Utiliza exatamente o mesmo cliente que enviou o código
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
-        const { apiId, apiHash, phone, code, phoneCodeHash } = req.body;
+        const { phone, code } = req.body;
 
-        const stringSession = new StringSession("");
-        const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
-            connectionRetries: 5,
-        });
+        const sessionData = activeClients[phone];
+        if (!sessionData) {
+            return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
+        }
 
-        await client.connect();
+        const { client, phoneCodeHash } = sessionData;
 
-        const result = await client.invoke(
+        await client.invoke(
             new Api.auth.SignIn({
                 phoneNumber: phone,
                 phoneCodeHash: phoneCodeHash,
@@ -67,6 +71,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         const savedSession = client.session.save();
         await client.disconnect();
+        delete activeClients[phone];
 
         res.json({ success: true, session: savedSession });
     } catch (error) {
