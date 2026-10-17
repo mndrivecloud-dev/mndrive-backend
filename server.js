@@ -2,8 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
 app.use(express.json());
@@ -26,17 +24,13 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        const result = await client.invoke(
-            new Api.auth.SendCode({
-                phoneNumber: phone,
+        const result = await client.sendCode(
+            {
                 apiId: Number(apiId),
                 apiHash: apiHash,
-                settings: new Api.CodeSettings({
-                    allowFlashcall: false,
-                    currentNumber: true,
-                    allowAppHash: true,
-                }),
-            })
+            },
+            phone,
+            false
         );
 
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
@@ -48,35 +42,26 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código utilizando estritamente client.invoke(new Api.auth.SignIn)
+// Rota 2: Valida o código utilizando o método client.signIn do GramJS e cria o canal
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
-        const { phone, code, apiId, apiHash } = req.body;
+        const { phone, code } = req.body;
 
         const sessionData = activeClients[phone];
-        let client;
-        let phoneCodeHash;
-
-        if (sessionData) {
-            client = sessionData.client;
-            phoneCodeHash = sessionData.phoneCodeHash;
-        } else {
-            client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
-                connectionRetries: 5,
-            });
-            await client.connect();
+        if (!sessionData) {
+            return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
         }
 
-        // Chamada oficial MTProto via invoke que elimina qualquer erro de função inexistente
-        await client.invoke(
-            new Api.auth.SignIn({
-                phoneNumber: phone,
-                phoneCodeHash: phoneCodeHash || req.body.phoneCodeHash,
-                phoneCode: code,
-            })
-        );
+        const { client, phoneCodeHash } = sessionData;
 
-        // Verifica e cria automaticamente o canal MNDRIVE CLOUD se ele não existir
+        // Submete o código de login utilizando o método oficial do cliente GramJS
+        await client.signIn({
+            phoneNumber: phone,
+            phoneCodeHash: phoneCodeHash,
+            phoneCode: code,
+        });
+
+        // Verifica e cria o canal MNDRIVE CLOUD se não existir
         let channelId = null;
         try {
             const dialogs = await client.getDialogs();
@@ -106,38 +91,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
         res.json({ success: true, session: savedSession, channelId });
     } catch (error) {
         console.error("Erro em sign-in:", error);
-        res.json({ success: false, message: error.message });
-    }
-});
-
-// Rota 3: Upload de ficheiros para o canal MNDRIVE CLOUD
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-    try {
-        const { apiId, apiHash, sessionString, channelId } = req.body;
-        const file = req.file;
-
-        if (!file) {
-            return res.json({ success: false, message: "Nenhum ficheiro enviado." });
-        }
-
-        const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
-        await client.connect();
-
-        const uploadedFile = await client.sendFile(channelId || 'me', {
-            file: file.buffer,
-            workers: 2,
-            fileSize: file.size,
-            attributes: [
-                new Api.DocumentAttributeFilename({ fileName: file.originalname })
-            ]
-        });
-
-        const messageId = uploadedFile.id;
-        await client.disconnect();
-
-        res.json({ success: true, messageId });
-    } catch (error) {
-        console.error("Erro no upload:", error);
         res.json({ success: false, message: error.message });
     }
 });
