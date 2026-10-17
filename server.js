@@ -13,7 +13,7 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Rota 1: Envia o código e guarda a sessão do cliente em memória
+// Rota 1: Envia o código de login
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
@@ -42,7 +42,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Utiliza o método direto Api.auth.SignIn via invoke (compatível com qualquer versão do GramJS)
+// Rota 2: Valida o código, verifica se o canal MNDRIVE CLOUD existe e cria apenas se necessário
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -54,7 +54,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         const { client, phoneCodeHash } = sessionData;
 
-        // Chamada direta e universal do protocolo Telegram para autenticar o código
+        // Autentica o código
         await client.invoke(
             new Api.auth.SignIn({
                 phoneNumber: phone,
@@ -63,11 +63,34 @@ app.post('/api/auth/sign-in', async (req, res) => {
             })
         );
 
+        // Verifica os diálogos/canais existentes na conta
+        const dialogs = await client.getDialogs();
+        let targetChannel = dialogs.find(d => d.title === "MNDRIVE CLOUD" && d.isChannel);
+
+        // Se o canal não existir, cria-o automaticamente
+        if (!targetChannel) {
+            const createResult = await client.invoke(
+                new Api.channels.CreateChannel({
+                    title: "MNDRIVE CLOUD",
+                    about: "Canal oficial de armazenamento em nuvem do MNDRIVE Quantum Cloud.",
+                    megagroup: false,
+                })
+            );
+            
+            // Extrai o ID ou username do canal criado para sincronização
+            const createdChat = createResult.chats[0];
+            targetChannel = { id: createdChat.id };
+        }
+
         const savedSession = client.session.save();
         await client.disconnect();
         delete activeClients[phone];
 
-        res.json({ success: true, session: savedSession });
+        res.json({ 
+            success: true, 
+            session: savedSession, 
+            channelId: targetChannel ? targetChannel.id : null 
+        });
     } catch (error) {
         console.error("Erro em sign-in:", error);
         res.json({ success: false, message: error.message });
