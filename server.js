@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
@@ -23,13 +23,17 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        const result = await client.sendCode(
-            {
+        const result = await client.invoke(
+            new Api.auth.SendCode({
+                phoneNumber: phone,
                 apiId: Number(apiId),
                 apiHash: apiHash,
-            },
-            phone,
-            false
+                settings: new Api.CodeSettings({
+                    allowFlashcall: false,
+                    currentNumber: true,
+                    allowAppHash: true,
+                }),
+            })
         );
 
         await client.disconnect();
@@ -41,7 +45,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código digitado usando a função invoke (método oficial MTProto para sign in)
+// Rota 2: Valida o código digitado usando a API de sign in do GramJS
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { apiId, apiHash, phone, code, phoneCodeHash } = req.body;
@@ -53,7 +57,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         await client.connect();
 
-        // Utiliza o método direto da API do Telegram (auth.signIn) através do invoke do GramJS
         const result = await client.invoke(
             new Api.auth.SignIn({
                 phoneNumber: phone,
