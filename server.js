@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const fileUpload = require('express-fileupload'); // Opcional, ou use multer se preferir
 
 const app = express();
 app.use(express.json());
@@ -13,26 +14,14 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Rota 1: Envia o código de login
+// Rota 1: Enviar código
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
-        
-        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
-            connectionRetries: 5,
-        });
-
+        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, { connectionRetries: 5 });
         await client.connect();
         
-        const result = await client.sendCode(
-            {
-                apiId: Number(apiId),
-                apiHash: apiHash,
-            },
-            phone,
-            false
-        );
-
+        const result = await client.sendCode({ apiId: Number(apiId), apiHash: apiHash }, phone, false);
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
 
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
@@ -42,11 +31,10 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código, verifica se o canal MNDRIVE CLOUD existe e cria apenas se necessário
+// Rota 2: Sign-in e verificação/criação do canal MNDRIVE CLOUD
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
-
         const sessionData = activeClients[phone];
         if (!sessionData) {
             return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
@@ -54,7 +42,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         const { client, phoneCodeHash } = sessionData;
 
-        // Autentica o código
         await client.invoke(
             new Api.auth.SignIn({
                 phoneNumber: phone,
@@ -63,11 +50,10 @@ app.post('/api/auth/sign-in', async (req, res) => {
             })
         );
 
-        // Verifica os diálogos/canais existentes na conta
+        // Procura ou cria o canal MNDRIVE CLOUD
         const dialogs = await client.getDialogs();
         let targetChannel = dialogs.find(d => d.title === "MNDRIVE CLOUD" && d.isChannel);
 
-        // Se o canal não existir, cria-o automaticamente
         if (!targetChannel) {
             const createResult = await client.invoke(
                 new Api.channels.CreateChannel({
@@ -76,8 +62,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
                     megagroup: false,
                 })
             );
-            
-            // Extrai o ID ou username do canal criado para sincronização
             const createdChat = createResult.chats[0];
             targetChannel = { id: createdChat.id };
         }
@@ -89,7 +73,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
         res.json({ 
             success: true, 
             session: savedSession, 
-            channelId: targetChannel ? targetChannel.id : null 
+            channelId: targetChannel.id.toString() 
         });
     } catch (error) {
         console.error("Erro em sign-in:", error);
