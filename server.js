@@ -24,17 +24,13 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        const result = await client.invoke(
-            new Api.auth.SendCode({
-                phoneNumber: phone,
+        const result = await client.sendCode(
+            {
                 apiId: Number(apiId),
                 apiHash: apiHash,
-                settings: new Api.CodeSettings({
-                    allowFlashcall: false,
-                    currentNumber: true,
-                    allowAppHash: true,
-                }),
-            })
+            },
+            phone,
+            false
         );
 
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
@@ -46,7 +42,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código utilizando a API correta (Api.auth.SignIn) e cria o canal
+// Rota 2: Valida o código utilizando o método client.signIn do GramJS e cria o canal
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -58,14 +54,12 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         const { client, phoneCodeHash } = sessionData;
 
-        // Autentica o código utilizando o método oficial de baixo nível do GramJS
-        await client.invoke(
-            new Api.auth.SignIn({
-                phoneNumber: phone,
-                phoneCodeHash: phoneCodeHash,
-                phoneCode: code,
-            })
-        );
+        // Submete o código de login utilizando o método oficial do cliente GramJS
+        await client.signIn({
+            phoneNumber: phone,
+            phoneCodeHash: phoneCodeHash,
+            phoneCode: code,
+        });
 
         // Verifica e cria o canal MNDRIVE CLOUD se não existir
         let channelId = null;
