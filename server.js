@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const multer = require('multer'); // Necessário para receber ficheiros no Express
+const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
@@ -19,10 +19,26 @@ app.get('/', (req, res) => {
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
-        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, { connectionRetries: 5 });
+        
+        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
+            connectionRetries: 5,
+        });
+
         await client.connect();
         
-        const result = await client.sendCode({ apiId: Number(apiId), apiHash: apiHash }, phone, false);
+        const result = await client.invoke(
+            new Api.auth.SendCode({
+                phoneNumber: phone,
+                apiId: Number(apiId),
+                apiHash: apiHash,
+                settings: new Api.CodeSettings({
+                    allowFlashcall: false,
+                    currentNumber: true,
+                    allowAppHash: true,
+                }),
+            })
+        );
+
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
 
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
@@ -32,12 +48,12 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código e cria/localiza o canal MNDRIVE CLOUD
+// Rota 2: Valida o código utilizando estritamente client.invoke(new Api.auth.SignIn)
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code, apiId, apiHash } = req.body;
+
         const sessionData = activeClients[phone];
-        
         let client;
         let phoneCodeHash;
 
@@ -45,19 +61,23 @@ app.post('/api/auth/sign-in', async (req, res) => {
             client = sessionData.client;
             phoneCodeHash = sessionData.phoneCodeHash;
         } else {
-            // Caso recrie o cliente se a memória limpou
-            client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, { connectionRetries: 5 });
+            client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
+                connectionRetries: 5,
+            });
             await client.connect();
         }
 
-        await client.signIn({
-            phoneNumber: phone,
-            phoneCodeHash: phoneCodeHash,
-            phoneCode: code,
-        });
+        // Chamada oficial MTProto via invoke que elimina qualquer erro de função inexistente
+        await client.invoke(
+            new Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCodeHash: phoneCodeHash || req.body.phoneCodeHash,
+                phoneCode: code,
+            })
+        );
 
+        // Verifica e cria automaticamente o canal MNDRIVE CLOUD se ele não existir
         let channelId = null;
-        let channelUsername = null;
         try {
             const dialogs = await client.getDialogs();
             let mndriveChannel = dialogs.find(d => d.isChannel && d.title === "MNDRIVE CLOUD");
@@ -76,7 +96,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
                 channelId = mndriveChannel.id.toString();
             }
         } catch (channelErr) {
-            console.error("Aviso ao gerir o canal:", channelErr);
+            console.error("Aviso ao gerir o canal MNDRIVE CLOUD:", channelErr);
         }
 
         const savedSession = client.session.save();
@@ -90,7 +110,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Faz o upload do ficheiro diretamente para o canal do Telegram do utilizador
+// Rota 3: Upload de ficheiros para o canal MNDRIVE CLOUD
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     try {
         const { apiId, apiHash, sessionString, channelId } = req.body;
@@ -103,7 +123,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
         await client.connect();
 
-        // Envia o ficheiro para o canal MNDRIVE CLOUD utilizando o canal ID ou entidade
         const uploadedFile = await client.sendFile(channelId || 'me', {
             file: file.buffer,
             workers: 2,
