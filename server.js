@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
@@ -13,6 +13,7 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
+// Rota 1: Envia o código e guarda a sessão do cliente em memória
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
@@ -23,7 +24,6 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        // Utiliza o método nativo do cliente GramJS para enviar o código de forma segura
         const result = await client.sendCode(
             {
                 apiId: Number(apiId),
@@ -42,6 +42,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
+// Rota 2: Utiliza o método direto Api.auth.SignIn via invoke (compatível com qualquer versão do GramJS)
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -51,14 +52,16 @@ app.post('/api/auth/sign-in', async (req, res) => {
             return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
         }
 
-        const { client } = sessionData;
+        const { client, phoneCodeHash } = sessionData;
 
-        // Utiliza o método nativo .signIn() do GramJS que lida com o hash interno do cliente
-        await client.signIn({
-            phoneNumber: phone,
-            phoneCode: async () => code,
-            onError: (err) => { throw err; },
-        });
+        // Chamada direta e universal do protocolo Telegram para autenticar o código
+        await client.invoke(
+            new Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCodeHash: phoneCodeHash,
+                phoneCode: code,
+            })
+        );
 
         const savedSession = client.session.save();
         await client.disconnect();
