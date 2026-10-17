@@ -7,19 +7,22 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// Rota de teste inicial para verificar se o servidor está online
+app.get('/', (req, res) => {
+    res.send('MNDRIVE Backend Online');
+});
+
 // Rota 1: Envia o código de login para o Telegram do usuário
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
         
-        // Cria uma sessão temporária limpa
         const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
             connectionRetries: 5,
         });
 
         await client.connect();
         
-        // Envia o código via Telegram API oficial
         const result = await client.sendCode(
             {
                 apiId: Number(apiId),
@@ -31,7 +34,6 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.disconnect();
 
-        // Retorna o hash necessário para a próxima etapa de confirmação
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (error) {
         console.error(error);
@@ -39,7 +41,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Valida o código digitado e gera a string de sessão permanente
+// Rota 2: Valida o código digitado
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { apiId, apiHash, phone, code, phoneCodeHash } = req.body;
@@ -57,9 +59,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
             phoneCode: code,
         });
 
-        // Salve esta stringSession se quiser manter a conta conectada permanentemente no backend
         const savedSession = client.session.save();
-
         await client.disconnect();
 
         res.json({ success: true, session: savedSession });
