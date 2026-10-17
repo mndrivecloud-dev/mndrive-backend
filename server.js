@@ -13,6 +13,7 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
+// Rota 1: Envia o código de login
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
@@ -23,13 +24,17 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        const result = await client.sendCode(
-            {
+        const result = await client.invoke(
+            new Api.auth.SendCode({
+                phoneNumber: phone,
                 apiId: Number(apiId),
                 apiHash: apiHash,
-            },
-            phone,
-            false
+                settings: new Api.CodeSettings({
+                    allowFlashcall: false,
+                    currentNumber: true,
+                    allowAppHash: true,
+                }),
+            })
         );
 
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
@@ -41,6 +46,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
+// Rota 2: Valida o código utilizando a API correta (Api.auth.SignIn) e cria o canal
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -50,33 +56,31 @@ app.post('/api/auth/sign-in', async (req, res) => {
             return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
         }
 
-        const { client } = sessionData;
+        const { client, phoneCodeHash } = sessionData;
 
-        await client.signIn({
-            phoneNumber: phone,
-            phoneCode: async () => code,
-            onError: (err) => { throw err; },
-        });
+        // Autentica o código utilizando o método oficial de baixo nível do GramJS
+        await client.invoke(
+            new Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCodeHash: phoneCodeHash,
+                phoneCode: code,
+            })
+        );
 
-        // ==========================================
-        // VERIFICA E CRIA O CANAL MNDRIVE CLOUD SE NÃO EXISTIR
-        // ==========================================
+        // Verifica e cria o canal MNDRIVE CLOUD se não existir
         let channelId = null;
         try {
             const dialogs = await client.getDialogs();
             let mndriveChannel = dialogs.find(d => d.isChannel && d.title === "MNDRIVE CLOUD");
 
             if (!mndriveChannel) {
-                // Cria o canal se ele não existir
                 const created = await client.invoke(
                     new Api.channels.CreateChannel({
                         title: "MNDRIVE CLOUD",
                         about: "Canal oficial de armazenamento em nuvem do MNDRIVE Quantum Cloud.",
-                        megagroup: false, // Define como canal de broadcast (canal normal)
+                        megagroup: false,
                     })
                 );
-                
-                // Extrai o ID do canal recém-criado
                 const update = created.chats[0];
                 channelId = update.id.toString();
             } else {
