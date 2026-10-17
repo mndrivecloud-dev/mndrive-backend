@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Rota de teste inicial para verificar se o servidor está online
+// Rota de teste inicial
 app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
@@ -17,7 +17,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
         
-        const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
+        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
             connectionRetries: 5,
         });
 
@@ -36,35 +36,38 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
     } catch (error) {
-        console.error(error);
+        console.error("Erro em send-code:", error);
         res.json({ success: false, message: error.message });
     }
 });
 
-// Rota 2: Valida o código digitado
+// Rota 2: Valida o código digitado usando a função invoke (método oficial MTProto para sign in)
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { apiId, apiHash, phone, code, phoneCodeHash } = req.body;
 
         const stringSession = new StringSession("");
-        const client = new TelegramClient(stringSession, apiId, apiHash, {
+        const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
             connectionRetries: 5,
         });
 
         await client.connect();
 
-        await client.signIn({
-            phoneNumber: phone,
-            phoneCodeHash: phoneCodeHash,
-            phoneCode: code,
-        });
+        // Utiliza o método direto da API do Telegram (auth.signIn) através do invoke do GramJS
+        const result = await client.invoke(
+            new Api.auth.SignIn({
+                phoneNumber: phone,
+                phoneCodeHash: phoneCodeHash,
+                phoneCode: code,
+            })
+        );
 
         const savedSession = client.session.save();
         await client.disconnect();
 
         res.json({ success: true, session: savedSession });
     } catch (error) {
-        console.error(error);
+        console.error("Erro em sign-in:", error);
         res.json({ success: false, message: error.message });
     }
 });
