@@ -1,45 +1,38 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient, Api } = require('telegram');
+const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Armazena temporariamente os clientes ativos por número de telefone
 const activeClients = {};
 
 app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Rota 1: Envia o código e guarda a sessão do cliente em memória
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
         
-        const stringSession = new StringSession("");
-        const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
+        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, {
             connectionRetries: 5,
         });
 
         await client.connect();
         
-        const result = await client.invoke(
-            new Api.auth.SendCode({
-                phoneNumber: phone,
+        // Utiliza o método nativo do cliente GramJS para enviar o código de forma segura
+        const result = await client.sendCode(
+            {
                 apiId: Number(apiId),
                 apiHash: apiHash,
-                settings: new Api.CodeSettings({
-                    allowFlashcall: false,
-                    currentNumber: true,
-                    allowAppHash: true,
-                }),
-            })
+            },
+            phone,
+            false
         );
 
-        // Guarda o cliente ativo para ser reutilizado no sign-in
         activeClients[phone] = { client, phoneCodeHash: result.phoneCodeHash };
 
         res.json({ success: true, phoneCodeHash: result.phoneCodeHash });
@@ -49,7 +42,6 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Utiliza exatamente o mesmo cliente que enviou o código
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -59,15 +51,14 @@ app.post('/api/auth/sign-in', async (req, res) => {
             return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
         }
 
-        const { client, phoneCodeHash } = sessionData;
+        const { client } = sessionData;
 
-        await client.invoke(
-            new Api.auth.SignIn({
-                phoneNumber: phone,
-                phoneCodeHash: phoneCodeHash,
-                phoneCode: code,
-            })
-        );
+        // Utiliza o método nativo .signIn() do GramJS que lida com o hash interno do cliente
+        await client.signIn({
+            phoneNumber: phone,
+            phoneCode: async () => code,
+            onError: (err) => { throw err; },
+        });
 
         const savedSession = client.session.save();
         await client.disconnect();
