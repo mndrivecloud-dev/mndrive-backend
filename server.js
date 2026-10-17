@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 
 const app = express();
@@ -23,7 +23,6 @@ app.post('/api/auth/send-code', async (req, res) => {
 
         await client.connect();
         
-        // Utiliza o método nativo do cliente GramJS para enviar o código de forma segura
         const result = await client.sendCode(
             {
                 apiId: Number(apiId),
@@ -53,18 +52,45 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
         const { client } = sessionData;
 
-        // Utiliza o método nativo .signIn() do GramJS que lida com o hash interno do cliente
         await client.signIn({
             phoneNumber: phone,
             phoneCode: async () => code,
             onError: (err) => { throw err; },
         });
 
+        // ==========================================
+        // VERIFICA E CRIA O CANAL MNDRIVE CLOUD SE NÃO EXISTIR
+        // ==========================================
+        let channelId = null;
+        try {
+            const dialogs = await client.getDialogs();
+            let mndriveChannel = dialogs.find(d => d.isChannel && d.title === "MNDRIVE CLOUD");
+
+            if (!mndriveChannel) {
+                // Cria o canal se ele não existir
+                const created = await client.invoke(
+                    new Api.channels.CreateChannel({
+                        title: "MNDRIVE CLOUD",
+                        about: "Canal oficial de armazenamento em nuvem do MNDRIVE Quantum Cloud.",
+                        megagroup: false, // Define como canal de broadcast (canal normal)
+                    })
+                );
+                
+                // Extrai o ID do canal recém-criado
+                const update = created.chats[0];
+                channelId = update.id.toString();
+            } else {
+                channelId = mndriveChannel.id.toString();
+            }
+        } catch (channelErr) {
+            console.error("Aviso ao gerir o canal MNDRIVE CLOUD:", channelErr);
+        }
+
         const savedSession = client.session.save();
         await client.disconnect();
         delete activeClients[phone];
 
-        res.json({ success: true, session: savedSession });
+        res.json({ success: true, session: savedSession, channelId });
     } catch (error) {
         console.error("Erro em sign-in:", error);
         res.json({ success: false, message: error.message });
