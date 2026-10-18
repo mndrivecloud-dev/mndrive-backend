@@ -34,18 +34,16 @@ app.get('/', (req, res) => {
 
 // Função auxiliar para recuperar a session_string da memória ou do Supabase de forma segura
 async function getOrRestoreClient(phone, apiId, apiHash) {
-    // 1. Se já estiver na memória e conectado, reutiliza
     if (activeClients[phone] && activeClients[phone].client && activeClients[phone].client.connected) {
         return activeClients[phone].client;
     }
 
     let sessionString = activeClients[phone]?.sessionString || "";
 
-    // 2. Se não estiver na memória, busca no Supabase pelo número de telefone
     if (!sessionString) {
         try {
             const { data, error } = await supabase
-                .from('mndrive_sessions') // Tabela dedicada para guardar as sessões
+                .from('mndrive_sessions')
                 .select('session_string')
                 .eq('phone', phone)
                 .maybeSingle();
@@ -59,7 +57,6 @@ async function getOrRestoreClient(phone, apiId, apiHash) {
         }
     }
 
-    // 3. Cria e conecta o cliente Telegram com a sessão recuperada via porta TLS 443
     const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, getClientOptions());
     await client.connect();
     
@@ -121,7 +118,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
         const savedSession = client.session.save();
         activeClients[phone] = { client, sessionString: savedSession };
 
-        // PERSISTÊNCIA NO SUPABASE: Salva a session_string para nunca mais perder após reiniciar o Render
         try {
             await supabase
                 .from('mndrive_sessions')
@@ -159,24 +155,17 @@ app.post('/api/upload', async (req, res) => {
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        // Caminho temporário único
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        
-        // Grava de forma assíncrona otimizada
         await uploadedFile.mv(tempPath);
 
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
-            workers: 4, // Aumenta o paralelismo de envio de partes para o Telegram via TLS 443
+            workers: 4,
             clearDraft: true,
-            progressCallback: (progress) => {
-                // Opcional: Mostra no console do Render a percentagem do envio para o Telegram
-                // console.log(`Progresso Telegram: ${Math.round(progress * 100)}%`);
-            }
+            progressCallback: (progress) => {}
         });
 
-        // Limpeza imediata do disco do Render para liberar espaço e I/O
         if (tempPath && fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
         }
@@ -195,7 +184,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// Rota 4: Excluir Ficheiro
+// Rota 4: Excluir Ficheiro (Com permissões totais de gestão de mensagens)
 app.post('/api/delete', async (req, res) => {
     try {
         const { phone, channelId, messageId, apiId, apiHash } = req.body;
@@ -210,15 +199,15 @@ app.post('/api/delete', async (req, res) => {
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        const peer = Number(channelId);
         const msgIdNum = Number(messageId);
+        let rawChannelId = String(channelId);
 
-        await client.invoke(
-            new Api.channels.DeleteMessages({
-                channel: peer,
-                id: [msgIdNum],
-            })
-        );
+        // Remove o prefixo '-100' se houver para formatar corretamente para a API do GramJS caso necessário, 
+        // ou utiliza a entidade convertida diretamente pelo cliente.
+        const entity = await client.getEntity(rawChannelId);
+
+        // Utiliza o método nativo de exclusão de mensagens do canal/grupo com privilégios totais da conta
+        await client.deleteMessages(entity, [msgIdNum], { revoke: true });
 
         res.json({ success: true, message: "Mensagem apagada do Telegram com sucesso!" });
     } catch (error) {
