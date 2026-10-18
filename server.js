@@ -139,42 +139,46 @@ app.post('/api/auth/sign-in', async (req, res) => {
 });
 
 // Rota 3: Upload de Ficheiros Otimizado e Acelerado via Porta TLS 443
-// Rota para finalizar o upload fatiado enviado diretamente pelo navegador
-app.post('/api/upload-complete', async (req, res) => {
+app.post('/api/upload', async (req, res) => {
+    let tempPath = null;
     try {
-        const { phone, channelId, apiId, apiHash, fileId, fileName, fileTotalParts } = req.body;
+        const { phone, channelId, apiId, apiHash } = req.body;
+        const uploadedFile = req.files?.file;
 
-        if (!fileId || !phone) {
-            return res.json({ success: false, message: "Parâmetros em falta." });
+        if (!uploadedFile) {
+            return res.status(400).json({ success: false, message: "Nenhum arquivo enviado." });
         }
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        // Constrói o input file baseado nos blocos já enviados pelo cliente
-        const inputFile = new Api.InputFileBig({
-            id: BigInt(fileId),
-            parts: Number(fileTotalParts),
-            name: fileName
-        });
+        tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        await uploadedFile.mv(tempPath);
 
-        // Envia o ficheiro para o canal usando os blocos já presentes nos servidores do Telegram
         const result = await client.sendFile(channelId, {
-            file: inputFile,
-            caption: `MNDRIVE: ${fileName}`,
+            file: tempPath,
+            caption: `MNDRIVE: ${uploadedFile.name}`,
+            workers: 4,
             clearDraft: true
         });
 
-        res.json({ 
+        if (tempPath && fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+        }
+
+        return res.json({ 
             success: true, 
             messageId: result.id,
             fileId: result.media?.document?.id?.toString() || 'file_uploaded'
         });
     } catch (error) {
-        console.error("Erro ao finalizar upload direto:", error);
-        res.json({ success: false, message: error.message });
+        console.error("Erro crítico na rota /api/upload:", error);
+        if (tempPath && fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch(e) {}
+        }
+        // Retorna SEMPRE em formato JSON para evitar o erro de Unexpected token '<' no cliente
+        return res.status(500).json({ success: false, message: error.message || "Erro interno no servidor." });
     }
 });
-
 // Rota 4: Excluir Ficheiro (Com permissões totais de gestão de mensagens)
 app.post('/api/delete', async (req, res) => {
     try {
