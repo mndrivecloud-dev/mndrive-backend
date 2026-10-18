@@ -9,7 +9,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// Configurações do Express
+// Limites estendidos para arquivos pesados
 app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ limit: '500mb', extended: true }));
 app.use(cors());
@@ -21,10 +21,11 @@ app.use(fileUpload({
 
 const activeClients = {};
 
-// INICIALIZAÇÃO CORRETA DO SUPABASE (Certifique-se de que estas linhas existem e estão antes de qualquer função)
+// Configuração e inicialização segura do Supabase
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ybrxlijhhhrsrhrllpok.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJFhK9';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const getClientOptions = () => ({
     connectionRetries: 5,
     useWSS: false,
@@ -186,7 +187,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// NOVA ROTA: Upload otimizado via Supabase Storage (Navegador -> Supabase -> Telegram)
+// Rota 4: Upload otimizado via Supabase Storage
 app.post('/api/upload-from-supabase', async (req, res) => {
     let tempPath = null;
     try {
@@ -239,7 +240,7 @@ app.post('/api/upload-from-supabase', async (req, res) => {
     }
 });
 
-// Rota 4: Excluir Ficheiro
+// Rota 5: Excluir Ficheiro
 app.post('/api/delete', async (req, res) => {
     try {
         const { phone, channelId, messageId, apiId, apiHash } = req.body;
@@ -272,6 +273,5 @@ const server = app.listen(PORT, () => {
     console.log(`Backend rodando na porta ${PORT}`);
 });
 
-// CORREÇÃO 2: Aumentar o timeout global do servidor HTTP para evitar queda em uploads compridos (ex: 10 minutos)
 server.timeout = 600000;
 server.keepAliveTimeout = 600000;
