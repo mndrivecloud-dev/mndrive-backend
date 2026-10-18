@@ -4,6 +4,7 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const fileUpload = require('express-fileupload');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(express.json());
@@ -12,15 +13,64 @@ app.use(fileUpload());
 
 const activeClients = {};
 
+// Configuração do Supabase no Backend
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ybrxlijhhhrsrhrllpok.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJFhK9';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const getClientOptions = () => ({
+    connectionRetries: 5,
+    deviceModel: 'Desktop PC',
+    systemVersion: 'Windows 11 Pro',
+    appVersion: '4.8.9 x64',
+    langCode: 'en',
+    systemLangCode: 'en-US'
+});
+
 app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
+
+// Função auxiliar para recuperar a session_string da memória ou do Supabase de forma segura
+async function getOrRestoreClient(phone, apiId, apiHash) {
+    // 1. Se já estiver na memória e conectado, reutiliza
+    if (activeClients[phone] && activeClients[phone].client && activeClients[phone].client.connected) {
+        return activeClients[phone].client;
+    }
+
+    let sessionString = activeClients[phone]?.sessionString || "";
+
+    // 2. Se não estiver na memória, busca no Supabase pelo número de telefone
+    if (!sessionString) {
+        try {
+            const { data, error } = await supabase
+                .from('mndrive_sessions') // Tabela dedicada para guardar as sessões
+                .select('session_string')
+                .eq('phone', phone)
+                .maybeSingle();
+            
+            if (data && data.session_string) {
+                sessionString = data.session_string;
+                console.log("Sessão recuperada com sucesso do Supabase para:", phone);
+            }
+        } catch (e) {
+            console.error("Erro ao consultar sessão no Supabase:", e);
+        }
+    }
+
+    // 3. Cria e conecta o cliente Telegram com a sessão recuperada
+    const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, getClientOptions());
+    await client.connect();
+    
+    activeClients[phone] = { client, sessionString };
+    return client;
+}
 
 // Rota 1: Enviar código de autenticação
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
-        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, { connectionRetries: 5 });
+        const client = new TelegramClient(new StringSession(""), Number(apiId), apiHash, getClientOptions());
         await client.connect();
         
         const result = await client.sendCode({ apiId: Number(apiId), apiHash: apiHash }, phone, false);
@@ -33,7 +83,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Sign-in e verificação/criação do canal MNDRIVE CLOUD
+// Rota 2: Sign-in e salvamento persistente da sessão no Supabase
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code, phoneCodeHash } = req.body;
@@ -52,7 +102,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
             })
         );
 
-        // Procura ou cria o canal MNDRIVE CLOUD
         const dialogs = await client.getDialogs();
         let targetChannel = dialogs.find(d => d.title === "MNDRIVE CLOUD" && d.isChannel);
 
@@ -71,6 +120,16 @@ app.post('/api/auth/sign-in', async (req, res) => {
         const savedSession = client.session.save();
         activeClients[phone] = { client, sessionString: savedSession };
 
+        // PERSISTÊNCIA NO SUPABASE: Salva a session_string para nunca mais perder após reiniciar o Render
+        try {
+            await supabase
+                .from('mndrive_sessions')
+                .upsert({ phone: phone, session_string: savedSession, updated_at: new Date() }, { onConflict: ['phone'] });
+            console.log("Sessão salva com sucesso no Supabase para o telemóvel:", phone);
+        } catch (dbErr) {
+            console.error("Aviso: Não foi possível salvar a sessão no Supabase:", dbErr.message);
+        }
+
         res.json({ 
             success: true, 
             session: savedSession, 
@@ -82,7 +141,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Upload de Ficheiros para o Canal MNDRIVE CLOUD via GramJS
+// Rota 3: Upload de Ficheiros Otimizado e Acelerado
 app.post('/api/upload', async (req, res) => {
     let tempPath = null;
     try {
@@ -93,33 +152,31 @@ app.post('/api/upload', async (req, res) => {
             return res.json({ success: false, message: "Nenhum arquivo enviado." });
         }
 
-        let clientData = activeClients[phone];
-        let client = clientData?.client;
-
-        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession
-        if (!client || !client.connected) {
-            const sessionString = clientData?.sessionString || "";
-            
-            if (!apiId || !apiHash) {
-                return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
-            }
-
-            client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
-            await client.connect();
-            activeClients[phone] = { client, sessionString };
+        if (!apiId || !apiHash || !phone) {
+            return res.json({ success: false, message: "Credenciais da API ou telefone em falta para reconexão." });
         }
 
-        // Salva temporariamente o arquivo no servidor para envio
+        const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
+
+        // Caminho temporário único
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        
+        // Grava de forma assíncrona otimizada
         await uploadedFile.mv(tempPath);
 
-        // Envia o ficheiro para o canal do Telegram configurado
+        // CORREÇÃO DA LERDEZA: Usar forceDocument se necessário e otimizar partes do gramjs
         const result = await client.sendFile(channelId, {
             file: tempPath,
-            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`
+            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
+            workers: 4, // Aumenta o paralelismo de envio de partes para o Telegram
+            clearDraft: true,
+            progressCallback: (progress) => {
+                // Opcional: Mostra no console do Render a percentagem do envio para o Telegram
+                // console.log(`Progresso Telegram: ${Math.round(progress * 100)}%`);
+            }
         });
 
-        // Limpa o ficheiro temporário do servidor
+        // Limpeza imediata do disco do Render para liberar espaço e I/O
         if (tempPath && fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
         }
@@ -138,7 +195,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// Rota 4: Excluir Ficheiro / Mensagem do Canal MNDRIVE CLOUD via GramJS
+// Rota 4: Excluir Ficheiro
 app.post('/api/delete', async (req, res) => {
     try {
         const { phone, channelId, messageId, apiId, apiHash } = req.body;
@@ -147,27 +204,15 @@ app.post('/api/delete', async (req, res) => {
             return res.json({ success: false, message: "Parâmetros em falta para exclusão." });
         }
 
-        let clientData = activeClients[phone];
-        let client = clientData?.client;
-
-        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession
-        if (!client || !client.connected) {
-            const sessionString = clientData?.sessionString || "";
-            
-            if (!apiId || !apiHash) {
-                return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
-            }
-
-            client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
-            await client.connect();
-            activeClients[phone] = { client, sessionString };
+        if (!apiId || !apiHash) {
+            return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
         }
 
-        // Converte o channelId e o messageId para o formato numérico correto do GramJS
+        const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
+
         const peer = Number(channelId);
         const msgIdNum = Number(messageId);
 
-        // Apaga a mensagem diretamente no canal do Telegram usando a API User
         await client.invoke(
             new Api.channels.DeleteMessages({
                 channel: peer,
