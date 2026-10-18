@@ -138,6 +138,50 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
+// Rota 4: Excluir Ficheiro / Mensagem do Canal MNDRIVE CLOUD via GramJS
+app.post('/api/delete', async (req, res) => {
+    try {
+        const { phone, channelId, messageId, apiId, apiHash } = req.body;
+
+        if (!messageId || !channelId || !phone) {
+            return res.json({ success: false, message: "Parâmetros em falta para exclusão." });
+        }
+
+        let clientData = activeClients[phone];
+        let client = clientData?.client;
+
+        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession
+        if (!client || !client.connected) {
+            const sessionString = clientData?.sessionString || "";
+            
+            if (!apiId || !apiHash) {
+                return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
+            }
+
+            client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
+            await client.connect();
+            activeClients[phone] = { client, sessionString };
+        }
+
+        // Converte o channelId e o messageId para o formato numérico correto do GramJS
+        const peer = Number(channelId);
+        const msgIdNum = Number(messageId);
+
+        // Apaga a mensagem diretamente no canal do Telegram usando a API User
+        await client.invoke(
+            new Api.channels.DeleteMessages({
+                channel: peer,
+                id: [msgIdNum],
+            })
+        );
+
+        res.json({ success: true, message: "Mensagem apagada do Telegram com sucesso!" });
+    } catch (error) {
+        console.error("Erro ao apagar mensagem no Telegram:", error);
+        res.json({ success: false, message: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Backend rodando na porta ${PORT}`);
