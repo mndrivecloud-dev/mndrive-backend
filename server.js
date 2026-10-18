@@ -164,15 +164,19 @@ app.post('/api/upload', async (req, res) => {
         // Grava de forma assíncrona otimizada
         await uploadedFile.mv(tempPath);
 
-        // CORREÇÃO DA LERDEZA: Usar forceDocument se necessário e otimizar partes do gramjs
+        // Configuração otimizada para evitar o travamento nos 99%
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
-            workers: 4, // Aumenta o paralelismo de envio de partes para o Telegram
+            workers: 8, // Aumentado de 4 para 8 para acelerar o envio e processamento dos blocos
             clearDraft: true,
+            partSizeKb: 512, // Tamanho padrão seguro para blocos no Telegram
             progressCallback: (progress) => {
-                // Opcional: Mostra no console do Render a percentagem do envio para o Telegram
-                // console.log(`Progresso Telegram: ${Math.round(progress * 100)}%`);
+                // Aqui você pode monitorar se necessário
+                const percent = Math.round(progress * 100);
+                if (percent % 20 === 0) {
+                    console.log(`Progresso MTProto: ${percent}%`);
+                }
             }
         });
 
