@@ -20,6 +20,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const getClientOptions = () => ({
     connectionRetries: 5,
+    useWSS: false, // Força a conexão TCP direta com encapsulamento TLS na porta 443
     deviceModel: 'Desktop PC',
     systemVersion: 'Windows 11 Pro',
     appVersion: '4.8.9 x64',
@@ -58,7 +59,7 @@ async function getOrRestoreClient(phone, apiId, apiHash) {
         }
     }
 
-    // 3. Cria e conecta o cliente Telegram com a sessão recuperada
+    // 3. Cria e conecta o cliente Telegram com a sessão recuperada via porta TLS 443
     const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, getClientOptions());
     await client.connect();
     
@@ -141,7 +142,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Upload de Ficheiros Otimizado e Acelerado
+// Rota 3: Upload de Ficheiros Otimizado e Acelerado via Porta TLS 443
 app.post('/api/upload', async (req, res) => {
     let tempPath = null;
     try {
@@ -164,19 +165,14 @@ app.post('/api/upload', async (req, res) => {
         // Grava de forma assíncrona otimizada
         await uploadedFile.mv(tempPath);
 
-        // Configuração otimizada para evitar o travamento nos 99%
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
-            workers: 8, // Aumentado de 4 para 8 para acelerar o envio e processamento dos blocos
+            workers: 4, // Aumenta o paralelismo de envio de partes para o Telegram via TLS 443
             clearDraft: true,
-            partSizeKb: 512, // Tamanho padrão seguro para blocos no Telegram
             progressCallback: (progress) => {
-                // Aqui você pode monitorar se necessário
-                const percent = Math.round(progress * 100);
-                if (percent % 20 === 0) {
-                    console.log(`Progresso MTProto: ${percent}%`);
-                }
+                // Opcional: Mostra no console do Render a percentagem do envio para o Telegram
+                // console.log(`Progresso Telegram: ${Math.round(progress * 100)}%`);
             }
         });
 
