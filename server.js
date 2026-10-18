@@ -2,11 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const fileUpload = require('express-fileupload'); // Opcional, ou use multer se preferir
+const fileUpload = require('express-fileupload');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(fileUpload());
 
 const activeClients = {};
 
@@ -67,8 +69,9 @@ app.post('/api/auth/sign-in', async (req, res) => {
         }
 
         const savedSession = client.session.save();
-        await client.disconnect();
-        delete activeClients[phone];
+        
+        // Guarda a sessão ativa em memória associada ao telefone
+        activeClients[phone] = { client, sessionString: savedSession };
 
         res.json({ 
             success: true, 
@@ -77,6 +80,56 @@ app.post('/api/auth/sign-in', async (req, res) => {
         });
     } catch (error) {
         console.error("Erro em sign-in:", error);
+        res.json({ success: false, message: error.message });
+    }
+});
+
+// Rota 3: Upload de Ficheiros para o Canal MNDRIVE CLOUD via GramJS
+app.post('/api/upload', async (req, res) => {
+    try {
+        const { phone, channelId } = req.body;
+        const uploadedFile = req.files?.file;
+
+        if (!uploadedFile) {
+            return res.json({ success: false, message: "Nenhum arquivo enviado." });
+        }
+
+        let clientData = activeClients[phone];
+        let client = clientData?.client;
+
+        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession salva
+        if (!client || !client.connected) {
+            const apiId = Number(localStorageGet('mndrive_api_id') || req.body.apiId);
+            const apiHash = localStorageGet('mndrive_api_hash') || req.body.apiHash;
+            const sessionString = clientData?.sessionString || "";
+
+            client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
+            await client.connect();
+            activeClients[phone] = { client, sessionString };
+        }
+
+        // Salva temporariamente o arquivo no servidor para envio
+        const tempPath = `./temp_${Date.now()}_${uploadedFile.name}`;
+        await uploadedFile.mv(tempPath);
+
+        // Envia o ficheiro para o canal do Telegram
+        const result = await client.sendFile(channelId, {
+            file: tempPath,
+            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`
+        });
+
+        // Limpa o ficheiro temporário do servidor
+        if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+        }
+
+        res.json({ 
+            success: true, 
+            messageId: result.id,
+            fileId: result.media?.document?.id?.toString() || 'file_uploaded'
+        });
+    } catch (error) {
+        console.error("Erro no upload:", error);
         res.json({ success: false, message: error.message });
     }
 });
