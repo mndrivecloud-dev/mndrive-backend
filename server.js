@@ -151,16 +151,19 @@ app.post('/api/upload', async (req, res) => {
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        // Caminho temporário estrito na memória/disco efêmero do Render
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         await uploadedFile.mv(tempPath);
 
-        // Envio nativo rápido do Node.js para o canal MNDRIVE CLOUD
+        // O segredo da velocidade: Aumentar o paralelismo (workers) para fatiar o upload
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE: ${uploadedFile.name}`,
-            workers: 8, // Paralelismo máximo para ir instantâneo
-            clearDraft: true
+            workers: 8, // 8 conexões simultâneas enviando blocos em paralelo para o Telegram
+            clearDraft: true,
+            progressCallback: (progress) => {
+                // Monitoramento interno de velocidade no console do servidor
+                // console.log(`Progresso: ${Math.round(progress * 100)}%`);
+            }
         });
 
         if (tempPath && fs.existsSync(tempPath)) {
@@ -173,6 +176,7 @@ app.post('/api/upload', async (req, res) => {
             fileId: result.media?.document?.id?.toString() || 'file_uploaded'
         });
     } catch (error) {
+        console.error("Erro no upload paralelo:", error);
         if (tempPath && fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch(e) {}
         }
