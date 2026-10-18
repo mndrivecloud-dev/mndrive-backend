@@ -1,4 +1,5 @@
 // server.js — Render usado SOMENTE para: pedir o código no Telegram e confirmar o login.
+// Upload, download e exclusão de arquivos ficam 100% no Supabase (feito pelo navegador).
 // Instalar: npm i express cors telegram
 const express = require("express");
 const cors = require("cors");
@@ -10,7 +11,6 @@ const app = express();
 app.use(cors()); // depois restrinja para o domínio onde o mndrive.html está hospedado
 app.use(express.json());
 
-const CHANNEL_TITLE = "MNDRIVE CLOUD";
 const TTL = 10 * 60 * 1000; // o código pendente expira em 10 min
 const pending = new Map();  // phone -> { client, phoneCodeHash, timer }
 
@@ -20,17 +20,6 @@ function drop(phone) {
   clearTimeout(p.timer);
   p.client.disconnect().catch(() => {});
   pending.delete(phone);
-}
-
-// Acha o canal "MNDRIVE CLOUD" ou cria um novo. Retorna o id no formato -100xxxxxxxxxx
-async function getOrCreateChannel(client) {
-  const dialogs = await client.getDialogs({ limit: 200 });
-  const found = dialogs.find((d) => d.isChannel && d.title === CHANNEL_TITLE);
-  if (found) return String(found.id);
-  const r = await client.invoke(
-    new Api.channels.CreateChannel({ title: CHANNEL_TITLE, about: "MNDRIVE", broadcast: true })
-  );
-  return "-100" + String(r.chats[0].id);
 }
 
 app.get("/", (_req, res) => res.send("ok")); // health check do Render
@@ -48,8 +37,7 @@ app.post("/api/auth/send-code", async (req, res) => {
     });
     await client.connect();
     const { phoneCodeHash } = await client.sendCode({ apiId: Number(apiId), apiHash }, phone);
-    const timer = setTimeout(() => drop(phone), TTL);
-    pending.set(phone, { client, phoneCodeHash, timer });
+    pending.set(phone, { client, phoneCodeHash, timer: setTimeout(() => drop(phone), TTL) });
     res.json({ success: true, phoneCodeHash });
   } catch (err) {
     console.error("send-code:", err.errorMessage || err.message);
@@ -57,7 +45,7 @@ app.post("/api/auth/send-code", async (req, res) => {
   }
 });
 
-// 2) Confirma o código (e a senha 2FA, se houver) e devolve a sessão + id do canal
+// 2) Confirma o código (e a senha 2FA, se houver). Não guarda nem devolve a sessão do Telegram.
 app.post("/api/auth/sign-in", async (req, res) => {
   const { phone, code, password } = req.body || {};
   const p = pending.get(phone);
@@ -78,11 +66,8 @@ app.post("/api/auth/sign-in", async (req, res) => {
       const pwd = await client.invoke(new Api.account.GetPassword());
       await client.invoke(new Api.auth.CheckPassword({ password: await computeCheck(pwd, password) }));
     }
-
-    const channelId = await getOrCreateChannel(client);
-    const session = client.session.save();
-    drop(phone);
-    res.json({ success: true, channelId, session });
+    drop(phone); // login confirmado: descarta a conexão
+    res.json({ success: true });
   } catch (err) {
     console.error("sign-in:", err.errorMessage || err.message);
     res.json({ success: false, message: err.errorMessage || err.message });
