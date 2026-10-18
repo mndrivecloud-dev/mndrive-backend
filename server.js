@@ -21,12 +21,12 @@ app.use(fileUpload({
 const activeClients = {};
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ybrxlijhhhrsrhrllpok.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJF
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJFhK9';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const getClientOptions = () => ({
     connectionRetries: 5,
-    useWSS: false, // Força a conexão TCP direta com encapsulamento TLS na porta 443
+    useWSS: false,
     deviceModel: 'Desktop PC',
     systemVersion: 'Windows 11 Pro',
     appVersion: '4.8.9 x64',
@@ -38,7 +38,6 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Função auxiliar para recuperar a session_string da memória ou do Supabase de forma segura
 async function getOrRestoreClient(phone, apiId, apiHash) {
     if (activeClients[phone] && activeClients[phone].client && activeClients[phone].client.connected) {
         return activeClients[phone].client;
@@ -48,7 +47,7 @@ async function getOrRestoreClient(phone, apiId, apiHash) {
 
     if (!sessionString) {
         try {
-            const { data, error } = await supabase
+            const { data } = await supabase
                 .from('mndrive_sessions')
                 .select('session_string')
                 .eq('phone', phone)
@@ -56,7 +55,6 @@ async function getOrRestoreClient(phone, apiId, apiHash) {
             
             if (data && data.session_string) {
                 sessionString = data.session_string;
-                console.log("Sessão recuperada com sucesso do Supabase para:", phone);
             }
         } catch (e) {
             console.error("Erro ao consultar sessão no Supabase:", e);
@@ -128,9 +126,8 @@ app.post('/api/auth/sign-in', async (req, res) => {
             await supabase
                 .from('mndrive_sessions')
                 .upsert({ phone: phone, session_string: savedSession, updated_at: new Date() }, { onConflict: ['phone'] });
-            console.log("Sessão salva com sucesso no Supabase para o telemóvel:", phone);
         } catch (dbErr) {
-            console.error("Aviso: Não foi possível salvar a sessão no Supabase:", dbErr.message);
+            console.error("Aviso Supabase:", dbErr.message);
         }
 
         res.json({ 
@@ -144,7 +141,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Upload de Ficheiros Otimizado e Acelerado via Porta TLS 443
+// Rota 3: Upload de Ficheiros com Suporte a Arquivos Pesados e Limpeza Segura
 app.post('/api/upload', async (req, res) => {
     let tempPath = null;
     try {
@@ -157,13 +154,17 @@ app.post('/api/upload', async (req, res) => {
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        await uploadedFile.mv(tempPath);
+        // Salva utilizando o caminho temporário gerado pelo express-fileupload em /tmp/
+        tempPath = uploadedFile.tempFilePath || `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        
+        if (!uploadedFile.tempFilePath) {
+            await uploadedFile.mv(tempPath);
+        }
 
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE: ${uploadedFile.name}`,
-            workers: 4,
+            workers: 8, // Aumenta a velocidade de envio para o Telegram
             clearDraft: true
         });
 
@@ -181,11 +182,11 @@ app.post('/api/upload', async (req, res) => {
         if (tempPath && fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch(e) {}
         }
-        // Retorna SEMPRE em formato JSON para evitar o erro de Unexpected token '<' no cliente
         return res.status(500).json({ success: false, message: error.message || "Erro interno no servidor." });
     }
 });
-// Rota 4: Excluir Ficheiro (Com permissões totais de gestão de mensagens)
+
+// Rota 4: Excluir Ficheiro
 app.post('/api/delete', async (req, res) => {
     try {
         const { phone, channelId, messageId, apiId, apiHash } = req.body;
@@ -202,12 +203,8 @@ app.post('/api/delete', async (req, res) => {
 
         const msgIdNum = Number(messageId);
         let rawChannelId = String(channelId);
-
-        // Remove o prefixo '-100' se houver para formatar corretamente para a API do GramJS caso necessário, 
-        // ou utiliza a entidade convertida diretamente pelo cliente.
         const entity = await client.getEntity(rawChannelId);
 
-        // Utiliza o método nativo de exclusão de mensagens do canal/grupo com privilégios totais da conta
         await client.deleteMessages(entity, [msgIdNum], { revoke: true });
 
         res.json({ success: true, message: "Mensagem apagada do Telegram com sucesso!" });
@@ -218,6 +215,10 @@ app.post('/api/delete', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Backend rodando na porta ${PORT}`);
 });
+
+// CORREÇÃO 2: Aumentar o timeout global do servidor HTTP para evitar queda em uploads compridos (ex: 10 minutos)
+server.timeout = 600000;
+server.keepAliveTimeout = 600000;
