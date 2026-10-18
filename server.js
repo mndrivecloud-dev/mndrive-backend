@@ -4,6 +4,7 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const fileUpload = require('express-fileupload');
 const fs = require('fs');
+const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -141,7 +142,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Upload de Ficheiros com Suporte a Arquivos Pesados e Limpeza Segura
+// Rota 3: Upload Tradicional de Ficheiros
 app.post('/api/upload', async (req, res) => {
     let tempPath = null;
     try {
@@ -154,7 +155,6 @@ app.post('/api/upload', async (req, res) => {
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        // Salva utilizando o caminho temporário gerado pelo express-fileupload em /tmp/
         tempPath = uploadedFile.tempFilePath || `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         
         if (!uploadedFile.tempFilePath) {
@@ -164,7 +164,7 @@ app.post('/api/upload', async (req, res) => {
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE: ${uploadedFile.name}`,
-            workers: 8, // Aumenta a velocidade de envio para o Telegram
+            workers: 8,
             clearDraft: true
         });
 
@@ -179,6 +179,59 @@ app.post('/api/upload', async (req, res) => {
         });
     } catch (error) {
         console.error("Erro crítico na rota /api/upload:", error);
+        if (tempPath && fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch(e) {}
+        }
+        return res.status(500).json({ success: false, message: error.message || "Erro interno no servidor." });
+    }
+});
+
+// NOVA ROTA: Upload otimizado via Supabase Storage (Navegador -> Supabase -> Telegram)
+app.post('/api/upload-from-supabase', async (req, res) => {
+    let tempPath = null;
+    try {
+        const { phone, channelId, apiId, apiHash, fileUrl, fileName } = req.body;
+
+        if (!fileUrl || !phone) {
+            return res.status(400).json({ success: false, message: "URL do ficheiro em falta." });
+        }
+
+        const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
+
+        tempPath = `./temp_${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+
+        const writer = fs.createWriteStream(tempPath);
+        const downloadResponse = await axios({
+            url: fileUrl,
+            method: 'GET',
+            responseType: 'stream'
+        });
+
+        downloadResponse.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+
+        const result = await client.sendFile(channelId, {
+            file: tempPath,
+            caption: `MNDRIVE: ${fileName}`,
+            workers: 8,
+            clearDraft: true
+        });
+
+        if (tempPath && fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+        }
+
+        return res.json({ 
+            success: true, 
+            messageId: result.id,
+            fileId: result.media?.document?.id?.toString() || 'file_uploaded'
+        });
+    } catch (error) {
+        console.error("Erro no upload via Supabase:", error);
         if (tempPath && fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch(e) {}
         }
