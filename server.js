@@ -7,15 +7,21 @@ const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-app.use(express.json());
+
+// CORREÇÃO 1: Aumentar os limites de payload e habilitar o express-fileupload com alta tolerância para arquivos pesados
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ limit: '500mb', extended: true }));
 app.use(cors());
-app.use(fileUpload());
+app.use(fileUpload({
+    limits: { fileSize: 500 * 1024 * 1024 }, // Limite de 500MB por arquivo
+    useTempFile: true,
+    tempFileDir: '/tmp/'
+}));
 
 const activeClients = {};
 
-// Configuração do Supabase no Backend
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ybrxlijhhhrsrhrllpok.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJFhK9';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJF
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const getClientOptions = () => ({
