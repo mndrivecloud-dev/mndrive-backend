@@ -139,36 +139,30 @@ app.post('/api/auth/sign-in', async (req, res) => {
 });
 
 // Rota 3: Upload de Ficheiros Otimizado e Acelerado via Porta TLS 443
-app.post('/api/upload', async (req, res) => {
-    let tempPath = null;
+// Rota para finalizar o upload fatiado enviado diretamente pelo navegador
+app.post('/api/upload-complete', async (req, res) => {
     try {
-        const { phone, channelId, apiId, apiHash } = req.body;
-        const uploadedFile = req.files?.file;
+        const { phone, channelId, apiId, apiHash, fileId, fileName, fileTotalParts } = req.body;
 
-        if (!uploadedFile) {
-            return res.json({ success: false, message: "Nenhum arquivo enviado." });
+        if (!fileId || !phone) {
+            return res.json({ success: false, message: "Parâmetros em falta." });
         }
 
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
-        tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        await uploadedFile.mv(tempPath);
-
-        // O segredo da velocidade: Aumentar o paralelismo (workers) para fatiar o upload
-        const result = await client.sendFile(channelId, {
-            file: tempPath,
-            caption: `MNDRIVE: ${uploadedFile.name}`,
-            workers: 8, // 8 conexões simultâneas enviando blocos em paralelo para o Telegram
-            clearDraft: true,
-            progressCallback: (progress) => {
-                // Monitoramento interno de velocidade no console do servidor
-                // console.log(`Progresso: ${Math.round(progress * 100)}%`);
-            }
+        // Constrói o input file baseado nos blocos já enviados pelo cliente
+        const inputFile = new Api.InputFileBig({
+            id: BigInt(fileId),
+            parts: Number(fileTotalParts),
+            name: fileName
         });
 
-        if (tempPath && fs.existsSync(tempPath)) {
-            fs.unlinkSync(tempPath);
-        }
+        // Envia o ficheiro para o canal usando os blocos já presentes nos servidores do Telegram
+        const result = await client.sendFile(channelId, {
+            file: inputFile,
+            caption: `MNDRIVE: ${fileName}`,
+            clearDraft: true
+        });
 
         res.json({ 
             success: true, 
@@ -176,10 +170,7 @@ app.post('/api/upload', async (req, res) => {
             fileId: result.media?.document?.id?.toString() || 'file_uploaded'
         });
     } catch (error) {
-        console.error("Erro no upload paralelo:", error);
-        if (tempPath && fs.existsSync(tempPath)) {
-            try { fs.unlinkSync(tempPath); } catch(e) {}
-        }
+        console.error("Erro ao finalizar upload direto:", error);
         res.json({ success: false, message: error.message });
     }
 });
