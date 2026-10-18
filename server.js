@@ -149,21 +149,18 @@ app.post('/api/upload', async (req, res) => {
             return res.json({ success: false, message: "Nenhum arquivo enviado." });
         }
 
-        if (!apiId || !apiHash || !phone) {
-            return res.json({ success: false, message: "Credenciais da API ou telefone em falta para reconexão." });
-        }
-
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
+        // Caminho temporário estrito na memória/disco efêmero do Render
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         await uploadedFile.mv(tempPath);
 
+        // Envio nativo rápido do Node.js para o canal MNDRIVE CLOUD
         const result = await client.sendFile(channelId, {
             file: tempPath,
-            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
-            workers: 4,
-            clearDraft: true,
-            progressCallback: (progress) => {}
+            caption: `MNDRIVE: ${uploadedFile.name}`,
+            workers: 8, // Paralelismo máximo para ir instantâneo
+            clearDraft: true
         });
 
         if (tempPath && fs.existsSync(tempPath)) {
@@ -176,7 +173,6 @@ app.post('/api/upload', async (req, res) => {
             fileId: result.media?.document?.id?.toString() || 'file_uploaded'
         });
     } catch (error) {
-        console.error("Erro detalhado no upload:", error);
         if (tempPath && fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch(e) {}
         }
