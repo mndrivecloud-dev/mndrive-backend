@@ -141,7 +141,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
     }
 });
 
-// Rota 3: Upload de Ficheiros
+// Rota 3: Upload de Ficheiros Otimizado e Acelerado
 app.post('/api/upload', async (req, res) => {
     let tempPath = null;
     try {
@@ -156,17 +156,27 @@ app.post('/api/upload', async (req, res) => {
             return res.json({ success: false, message: "Credenciais da API ou telefone em falta para reconexão." });
         }
 
-        // Obtém o cliente de forma segura (resgatando do Supabase caso o Render tenha reiniciado)
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
+        // Caminho temporário único
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        
+        // Grava de forma assíncrona otimizada
         await uploadedFile.mv(tempPath);
 
+        // CORREÇÃO DA LERDEZA: Usar forceDocument se necessário e otimizar partes do gramjs
         const result = await client.sendFile(channelId, {
             file: tempPath,
-            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`
+            caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`,
+            workers: 4, // Aumenta o paralelismo de envio de partes para o Telegram
+            clearDraft: true,
+            progressCallback: (progress) => {
+                // Opcional: Mostra no console do Render a percentagem do envio para o Telegram
+                // console.log(`Progresso Telegram: ${Math.round(progress * 100)}%`);
+            }
         });
 
+        // Limpeza imediata do disco do Render para liberar espaço e I/O
         if (tempPath && fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
         }
