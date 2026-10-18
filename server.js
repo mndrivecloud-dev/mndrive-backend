@@ -86,6 +86,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
 
 // Rota 3: Upload de Ficheiros para o Canal MNDRIVE CLOUD via GramJS
 app.post('/api/upload', async (req, res) => {
+    let tempPath = null;
     try {
         const { phone, channelId, apiId, apiHash } = req.body;
         const uploadedFile = req.files?.file;
@@ -110,8 +111,8 @@ app.post('/api/upload', async (req, res) => {
             activeClients[phone] = { client, sessionString };
         }
 
-        // Salva temporariamente o arquivo no servidor para envio
-        const tempPath = `./temp_${Date.now()}_${uploadedFile.name}`;
+        // Salva temporariamente o arquivo no servidor
+        tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         await uploadedFile.mv(tempPath);
 
         // Envia o ficheiro para o canal do Telegram
@@ -121,7 +122,7 @@ app.post('/api/upload', async (req, res) => {
         });
 
         // Limpa o ficheiro temporário do servidor
-        if (fs.existsSync(tempPath)) {
+        if (tempPath && fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
         }
 
@@ -131,7 +132,11 @@ app.post('/api/upload', async (req, res) => {
             fileId: result.media?.document?.id?.toString() || 'file_uploaded'
         });
     } catch (error) {
-        console.error("Erro no upload:", error);
+        console.error("Erro detalhado no upload:", error);
+        // Limpa o arquivo temporário em caso de erro
+        if (tempPath && fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch(e) {}
+        }
         res.json({ success: false, message: error.message });
     }
 });
