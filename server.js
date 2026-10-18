@@ -16,7 +16,7 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Rota 1: Enviar código
+// Rota 1: Enviar código de autenticação
 app.post('/api/auth/send-code', async (req, res) => {
     try {
         const { apiId, apiHash, phone } = req.body;
@@ -36,18 +36,18 @@ app.post('/api/auth/send-code', async (req, res) => {
 // Rota 2: Sign-in e verificação/criação do canal MNDRIVE CLOUD
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
-        const { phone, code } = req.body;
+        const { phone, code, phoneCodeHash } = req.body;
         const sessionData = activeClients[phone];
         if (!sessionData) {
             return res.json({ success: false, message: "Sessão expirada. Solicite um novo código." });
         }
 
-        const { client, phoneCodeHash } = sessionData;
+        const { client } = sessionData;
 
         await client.invoke(
             new Api.auth.SignIn({
                 phoneNumber: phone,
-                phoneCodeHash: phoneCodeHash,
+                phoneCodeHash: phoneCodeHash || sessionData.phoneCodeHash,
                 phoneCode: code,
             })
         );
@@ -69,8 +69,6 @@ app.post('/api/auth/sign-in', async (req, res) => {
         }
 
         const savedSession = client.session.save();
-        
-        // Guarda a sessão ativa em memória associada ao telefone
         activeClients[phone] = { client, sessionString: savedSession };
 
         res.json({ 
@@ -98,7 +96,7 @@ app.post('/api/upload', async (req, res) => {
         let clientData = activeClients[phone];
         let client = clientData?.client;
 
-        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession salva
+        // Se o cliente não estiver conectado na memória, reconecta usando a StringSession
         if (!client || !client.connected) {
             const sessionString = clientData?.sessionString || "";
             
@@ -111,11 +109,11 @@ app.post('/api/upload', async (req, res) => {
             activeClients[phone] = { client, sessionString };
         }
 
-        // Salva temporariamente o arquivo no servidor
+        // Salva temporariamente o arquivo no servidor para envio
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         await uploadedFile.mv(tempPath);
 
-        // Envia o ficheiro para o canal do Telegram
+        // Envia o ficheiro para o canal do Telegram configurado
         const result = await client.sendFile(channelId, {
             file: tempPath,
             caption: `MNDRIVE UPLOAD: ${uploadedFile.name}`
@@ -133,7 +131,6 @@ app.post('/api/upload', async (req, res) => {
         });
     } catch (error) {
         console.error("Erro detalhado no upload:", error);
-        // Limpa o arquivo temporário em caso de erro
         if (tempPath && fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch(e) {}
         }
