@@ -13,7 +13,7 @@ app.use(fileUpload());
 
 const activeClients = {};
 
-// Configuração do Supabase no Backend para resgatar sessões salvas
+// Configuração do Supabase no Backend
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ybrxlijhhhrsrhrllpok.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_pQ7dfAc9p3C1MEgnez6oHg_IjhJFhK9';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -31,32 +31,37 @@ app.get('/', (req, res) => {
     res.send('MNDRIVE Backend Online');
 });
 
-// Função auxiliar para recuperar a session_string da memória ou do Supabase
-async function getOrRestoreClient(phone, apiId, apiHash, providedSession = "") {
+// Função auxiliar para recuperar a session_string da memória ou do Supabase de forma segura
+async function getOrRestoreClient(phone, apiId, apiHash) {
+    // 1. Se já estiver na memória e conectado, reutiliza
     if (activeClients[phone] && activeClients[phone].client && activeClients[phone].client.connected) {
         return activeClients[phone].client;
     }
 
-    let sessionString = providedSession || activeClients[phone]?.sessionString || "";
+    let sessionString = activeClients[phone]?.sessionString || "";
 
-    // Se não estiver na memória, tenta buscar no Supabase
+    // 2. Se não estiver na memória, busca no Supabase pelo número de telefone
     if (!sessionString) {
         try {
-            const { data } = await supabase
-                .from('mndrive_cloud')
-                .select('*')
-                .filter('bot_token', 'ilike', `%${apiId}%`)
+            const { data, error } = await supabase
+                .from('mndrive_sessions') // Tabela dedicada para guardar as sessões
+                .select('session_string')
+                .eq('phone', phone)
                 .maybeSingle();
             
-            // Nota: Se você salvar a sessionString no Supabase durante o sign-in, ela pode ser recuperada aqui.
-            // Caso contrário, garanta que o client use a session correta.
+            if (data && data.session_string) {
+                sessionString = data.session_string;
+                console.log("Sessão recuperada com sucesso do Supabase para:", phone);
+            }
         } catch (e) {
-            console.error("Erro ao recuperar sessão do Supabase:", e);
+            console.error("Erro ao consultar sessão no Supabase:", e);
         }
     }
 
+    // 3. Cria e conecta o cliente Telegram com a sessão recuperada
     const client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, getClientOptions());
     await client.connect();
+    
     activeClients[phone] = { client, sessionString };
     return client;
 }
@@ -78,7 +83,7 @@ app.post('/api/auth/send-code', async (req, res) => {
     }
 });
 
-// Rota 2: Sign-in
+// Rota 2: Sign-in e salvamento persistente da sessão no Supabase
 app.post('/api/auth/sign-in', async (req, res) => {
     try {
         const { phone, code, phoneCodeHash } = req.body;
@@ -115,6 +120,16 @@ app.post('/api/auth/sign-in', async (req, res) => {
         const savedSession = client.session.save();
         activeClients[phone] = { client, sessionString: savedSession };
 
+        // PERSISTÊNCIA NO SUPABASE: Salva a session_string para nunca mais perder após reiniciar o Render
+        try {
+            await supabase
+                .from('mndrive_sessions')
+                .upsert({ phone: phone, session_string: savedSession, updated_at: new Date() }, { onConflict: ['phone'] });
+            console.log("Sessão salva com sucesso no Supabase para o telemóvel:", phone);
+        } catch (dbErr) {
+            console.error("Aviso: Não foi possível salvar a sessão no Supabase:", dbErr.message);
+        }
+
         res.json({ 
             success: true, 
             session: savedSession, 
@@ -137,11 +152,11 @@ app.post('/api/upload', async (req, res) => {
             return res.json({ success: false, message: "Nenhum arquivo enviado." });
         }
 
-        if (!apiId || !apiHash) {
-            return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
+        if (!apiId || !apiHash || !phone) {
+            return res.json({ success: false, message: "Credenciais da API ou telefone em falta para reconexão." });
         }
 
-        // Obtém o cliente de forma segura (evita o erro 401 caso o servidor tenha reiniciado)
+        // Obtém o cliente de forma segura (resgatando do Supabase caso o Render tenha reiniciado)
         const client = await getOrRestoreClient(phone, Number(apiId), apiHash);
 
         tempPath = `./temp_${Date.now()}_${uploadedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
