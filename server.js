@@ -87,7 +87,7 @@ app.post('/api/auth/sign-in', async (req, res) => {
 // Rota 3: Upload de Ficheiros para o Canal MNDRIVE CLOUD via GramJS
 app.post('/api/upload', async (req, res) => {
     try {
-        const { phone, channelId } = req.body;
+        const { phone, channelId, apiId, apiHash } = req.body;
         const uploadedFile = req.files?.file;
 
         if (!uploadedFile) {
@@ -99,9 +99,11 @@ app.post('/api/upload', async (req, res) => {
 
         // Se o cliente não estiver conectado na memória, reconecta usando a StringSession salva
         if (!client || !client.connected) {
-            const apiId = Number(localStorageGet('mndrive_api_id') || req.body.apiId);
-            const apiHash = localStorageGet('mndrive_api_hash') || req.body.apiHash;
             const sessionString = clientData?.sessionString || "";
+            
+            if (!apiId || !apiHash) {
+                return res.json({ success: false, message: "Credenciais da API em falta para reconexão." });
+            }
 
             client = new TelegramClient(new StringSession(sessionString), Number(apiId), apiHash, { connectionRetries: 5 });
             await client.connect();
